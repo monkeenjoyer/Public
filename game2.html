@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Europe Grand Strategy (Rapid AI Growth)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; background-color: #f0f4f8; padding-top: 20px; }
+        .game-container { display: flex; flex-direction: column; lg:flex-row; gap: 16px; width: 100%; max-width: 1200px; background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .map-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background-color: #e2e8f0; border-radius: 8px; padding: 10px; min-height: 400px; }
+        #gameMap { border: 1px solid #94a3b8; border-radius: 8px; background-color: #cbd5e1; }
+        .sidebar { width: 100%; lg:width: 350px; display: flex; flex-direction: column; gap: 16px; }
+        .panel { background-color: #f8fafc; padding: 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .panel h2 { font-size: 1.25rem; font-weight: 600; margin-bottom: 12px; color: #1e293b; }
+        .panel p, .panel div { margin-bottom: 8px; font-size: 0.9rem; color: #475569; }
+        .panel strong { color: #334155; }
+        .action-button, .control-button { background-color: #3b82f6; color: white; padding: 10px 15px; border-radius: 6px; text-align: center; cursor: pointer; transition: background-color 0.2s; font-size: 0.9rem; border: none; }
+        .action-button:hover, .control-button:hover { background-color: #2563eb; }
+        .action-button:disabled { background-color: #9ca3af; cursor: not-allowed; }
+        .log-container { max-height: 200px; overflow-y: auto; background-color: #e2e8f0; padding: 10px; border-radius: 6px; font-size: 0.8rem; }
+        .log-message { margin-bottom: 4px; }
+        .region.player-controlled { fill-opacity: 0.8 !important; }
+        .region.enemy-controlled { fill-opacity: 0.8 !important; }
+        .region.neutral-controlled { fill: #b0bec5 !important; fill-opacity: 0.7 !important; }
+        .region-label { font-size: 10px; fill: black; text-anchor: middle; pointer-events: none; }
+        .unit-label { font-size: 9px; fill: white; text-anchor: middle; pointer-events: none; font-weight: bold; }
+        #loadingIndicator { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); color: white; display: flex; justify-content: center; align-items: center; font-size: 2rem; z-index: 9999; display: none; }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 10000; }
+        .modal-content { background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); text-align: center; max-width: 400px; }
+        .modal-content h3 { margin-top: 0; margin-bottom: 15px; font-size: 1.5rem; color: #1e293b; }
+        .modal-content p { margin-bottom: 20px; color: #475569; }
+        .modal-button { background-color: #3b82f6; color: white; padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+        .modal-button:hover { background-color: #2563eb; }
+    </style>
+</head>
+<body>
+    <div id="loadingIndicator">Loading Game...</div>
+
+    <div class="game-container">
+        <div class="map-container">
+            <svg id="gameMap" width="600" height="500" viewBox="0 0 600 500"></svg>
+        </div>
+
+        <div class="sidebar">
+            <div class="panel">
+                <h2 id="playerNationName">Player Nation</h2>
+                <p>Turn: <strong id="turnCounter">1</strong></p>
+                <p>Money: <strong id="playerMoney">0</strong></p>
+                <p>Stability: <strong id="playerStability">0%</strong></p>
+            </div>
+
+            <div class="panel" id="selectedRegionPanel" style="display: none;">
+                <h2>Selected Region: <span id="selectedRegionName"></span></h2>
+                <p>Owner: <span id="selectedRegionOwner"></span></p>
+                <p>Economy Value: <span id="selectedRegionEconomy"></span></p>
+                <p>Military Units: <span id="selectedRegionUnits"></span></p>
+                <p>Fortification: <span id="selectedRegionForts"></span></p>
+            </div>
+            
+            <div class="panel">
+                <h2>Actions</h2>
+                <div id="actionsContainer" class="flex flex-col gap-2">
+                    </div>
+                 <button id="nextTurnButton" class="control-button mt-4 w-full">Next Turn</button>
+            </div>
+
+            <div class="panel">
+                <h2>Game Log</h2>
+                <div id="gameLog" class="log-container">
+                    <p class="log-message">Game started. Initializing...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="messageModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3 id="modalTitle">Game Message</h3>
+            <p id="modalMessage"></p>
+            <button id="modalCloseButton" class="modal-button">OK</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- Game State Variables ---
+        let gameState = null;
+        let selectedRegionId = null;
+        const PLAYER_NATION_ID = 'BRI'; // Player always controls Britannia
+
+        // --- Initial Game Data ---
+        const initialNationsData = () => [ 
+            { id: 'BRI', name: 'Britannia', color: '#4285F4', money: 1000, stability: 70, isPlayer: true, aiBehavior: 'balanced' },
+            { id: 'FRA', name: 'Francia', color: '#34A853', money: 800, stability: 65, isPlayer: false, aiBehavior: 'aggressive' },
+            { id: 'GER', name: 'Germania', color: '#757575', money: 900, stability: 60, isPlayer: false, aiBehavior: 'defensive' },
+            { id: 'HIS', name: 'Hispania', color: '#EA4335', money: 700, stability: 75, isPlayer: false, aiBehavior: 'opportunistic' },
+            { id: 'ITA', name: 'Italia', color: '#FBBC05', money: 750, stability: 55, isPlayer: false, aiBehavior: 'expansionist' },
+        ];
+
+        const initialRegionsData = () => [ 
+            // Core Regions (Capitals)
+            { id: 'LON', name: 'London', owner: 'BRI', baseEconomy: 100, units: 5, fortification: 2, x: 100, y: 100, width: 80, height: 60, neighbors: ['SCO', 'IRE', 'NTH_SEA', 'ENG_CHA'] },
+            { id: 'PAR', name: 'Paris', owner: 'FRA', baseEconomy: 90, units: 4, fortification: 1, x: 180, y: 180, width: 80, height: 60, neighbors: ['AQU', 'BAV', 'NTH_SEA', 'ENG_CHA'] },
+            { id: 'BER', name: 'Berlin', owner: 'GER', baseEconomy: 95, units: 4, fortification: 1, x: 300, y: 120, width: 80, height: 60, neighbors: ['BAV', 'POL', 'BAL_SEA', 'NTH_SEA'] },
+            { id: 'MAD', name: 'Madrid', owner: 'HIS', baseEconomy: 80, units: 3, fortification: 2, x: 50, y: 280, width: 80, height: 60, neighbors: ['POR', 'AQU', 'ATL_OCE'] },
+            { id: 'ROM', name: 'Rome', owner: 'ITA', baseEconomy: 85, units: 3, fortification: 1, x: 250, y: 300, width: 80, height: 60, neighbors: ['BAV', 'ADR_SEA', 'TYR_SEA'] },
+            // Neutral Regions
+            { id: 'SCO', name: 'Scotland', owner: null, baseEconomy: 30, units: 1, fortification: 0, x: 80, y: 30, width: 70, height: 50, neighbors: ['LON', 'IRE', 'NOR_SEA', 'NTH_SEA'] },
+            { id: 'IRE', name: 'Ireland', owner: null, baseEconomy: 25, units: 1, fortification: 0, x: 20, y: 80, width: 60, height: 70, neighbors: ['LON', 'SCO', 'ATL_OCE'] },
+            { id: 'AQU', name: 'Aquitaine', owner: null, baseEconomy: 40, units: 2, fortification: 0, x: 120, y: 230, width: 90, height: 70, neighbors: ['PAR', 'MAD', 'BAY_BIS'] },
+            { id: 'BAV', name: 'Bavaria', owner: null, baseEconomy: 50, units: 2, fortification: 0, x: 250, y: 200, width: 90, height: 70, neighbors: ['PAR', 'BER', 'ROM', 'ALP'] },
+            { id: 'POR', name: 'Portugal', owner: null, baseEconomy: 30, units: 1, fortification: 0, x: 10, y: 250, width: 50, height: 60, neighbors: ['MAD', 'ATL_OCE'] },
+            { id: 'POL', name: 'Poland', owner: null, baseEconomy: 40, units: 1, fortification: 0, x: 400, y: 110, width: 80, height: 70, neighbors: ['BER', 'BAL_SEA'] },
+            // Sea Regions (Now contestable)
+            { id: 'NTH_SEA', name: 'North Sea', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 150, y: 50, width: 100, height: 40, neighbors: ['LON', 'PAR', 'BER', 'SCO', 'ENG_CHA', 'BAL_SEA', 'NOR_SEA'], isSea: true },
+            { id: 'ENG_CHA', name: 'Eng. Channel', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 120, y: 150, width: 80, height: 30, neighbors: ['LON', 'PAR', 'NTH_SEA', 'BAY_BIS', 'ATL_OCE'], isSea: true },
+            { id: 'BAL_SEA', name: 'Baltic Sea', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 350, y: 50, width: 100, height: 40, neighbors: ['BER', 'POL', 'NTH_SEA'], isSea: true},
+            { id: 'ATL_OCE', name: 'Atlantic', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 10, y: 160, width: 40, height: 80, neighbors: ['IRE', 'POR', 'MAD', 'ENG_CHA', 'BAY_BIS'], isSea: true},
+            { id: 'BAY_BIS', name: 'Bay of Biscay', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 70, y: 200, width: 60, height: 40, neighbors: ['AQU', 'ENG_CHA', 'ATL_OCE'], isSea: true},
+            { id: 'NOR_SEA', name: 'Norwegian Sea', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 120, y: 0, width: 100, height: 40, neighbors: ['SCO', 'NTH_SEA'], isSea: true},
+            { id: 'ADR_SEA', name: 'Adriatic Sea', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 320, y: 280, width: 70, height: 50, neighbors: ['ROM', 'TYR_SEA'], isSea: true},
+            { id: 'TYR_SEA', name: 'Tyrrhenian Sea', owner: null, baseEconomy: 0, units: 0, fortification: 0, x: 200, y: 330, width: 70, height: 60, neighbors: ['ROM', 'ADR_SEA'], isSea: true},
+            // Impassable Land
+            { id: 'ALP', name: 'The Alps', owner: null, baseEconomy: 0, units: 0, fortification: 3, x: 300, y: 200, width: 40, height: 70, neighbors: ['BAV'], isImpassableLand: true},
+        ];
+
+        // --- UI Elements ---
+        const gameMapSVG = document.getElementById('gameMap');
+        const playerNationNameUI = document.getElementById('playerNationName');
+        const turnCounterUI = document.getElementById('turnCounter');
+        const playerMoneyUI = document.getElementById('playerMoney');
+        const playerStabilityUI = document.getElementById('playerStability');
+        const selectedRegionPanelUI = document.getElementById('selectedRegionPanel');
+        const selectedRegionNameUI = document.getElementById('selectedRegionName');
+        const selectedRegionOwnerUI = document.getElementById('selectedRegionOwner');
+        const selectedRegionEconomyUI = document.getElementById('selectedRegionEconomy');
+        const selectedRegionUnitsUI = document.getElementById('selectedRegionUnits');
+        const selectedRegionFortsUI = document.getElementById('selectedRegionForts');
+        const actionsContainerUI = document.getElementById('actionsContainer');
+        const nextTurnButton = document.getElementById('nextTurnButton');
+        const gameLogUI = document.getElementById('gameLog');
+        
+        const messageModal = document.getElementById('messageModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalCloseButton = document.getElementById('modalCloseButton');
+        modalCloseButton.addEventListener('click', () => messageModal.style.display = 'none');
+
+        function showModal(title, message) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            messageModal.style.display = 'flex';
+        }
+
+        // --- Game Initialization ---
+        function initializeGameData() {
+            console.log("Initializing new game (Rapid AI Growth).");
+            addLogMessage("New game started. AI will grow rapidly. Progress not saved.");
+            gameState = createDefaultGameState();
+            updateUI();
+            drawMap();
+            document.getElementById('loadingIndicator').style.display = 'none';
+        }
+        
+        function createDefaultGameState() {
+            console.log("Creating default game state.");
+            return {
+                turn: 1,
+                playerNationId: PLAYER_NATION_ID,
+                nations: JSON.parse(JSON.stringify(initialNationsData())),
+                regions: JSON.parse(JSON.stringify(initialRegionsData())),
+                log: ["Welcome to Europe Grand Strategy! AI is set for rapid growth."],
+                selectedRegionId: null,
+            };
+        }
+
+        // --- UI Update Functions ---
+        function updateUI() {
+            if (!gameState) return;
+
+            const playerNation = gameState.nations.find(n => n.id === gameState.playerNationId);
+            if (playerNation) {
+                playerNationNameUI.textContent = playerNation.name;
+                playerMoneyUI.textContent = playerNation.money;
+                playerStabilityUI.textContent = `${playerNation.stability}%`;
+            }
+            turnCounterUI.textContent = gameState.turn;
+
+            gameLogUI.innerHTML = ''; 
+            gameState.log.slice(-20).forEach(msg => { // Show more log messages
+                const p = document.createElement('p');
+                p.className = 'log-message';
+                p.textContent = msg;
+                gameLogUI.appendChild(p);
+            });
+            gameLogUI.scrollTop = gameLogUI.scrollHeight;
+
+            updateSelectedRegionPanel();
+            populateActionButtons();
+        }
+
+        function addLogMessage(message, type = "info") {
+            if (!gameState) return;
+            const timestamp = new Date().toLocaleTimeString();
+            const fullMessage = `[${timestamp}] ${message}`;
+            gameState.log.push(fullMessage);
+            if (gameState.log.length > 100) { // Keep more logs for debugging AI
+                gameState.log.shift();
+            }
+            
+            const p = document.createElement('p');
+            p.className = 'log-message';
+            if (type === "error") p.style.color = "red";
+            else if (type === "combat") p.style.color = "purple";
+            else if (type === "ai_action") p.style.color = "blue";
+            else if (type === "ai_econ") p.style.color = "green";
+            else if (type === "ai_mil") p.style.color = "orange";
+            p.textContent = fullMessage;
+            gameLogUI.appendChild(p);
+            gameLogUI.scrollTop = gameLogUI.scrollHeight;
+        }
+        
+        function drawMap() {
+            if (!gameState || !gameState.regions) return;
+            gameMapSVG.innerHTML = ''; 
+
+            gameState.regions.forEach(region => {
+                const regionRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                regionRect.setAttribute('x', region.x);
+                regionRect.setAttribute('y', region.y);
+                regionRect.setAttribute('width', region.width);
+                regionRect.setAttribute('height', region.height);
+                regionRect.setAttribute('stroke', '#333');
+                regionRect.setAttribute('stroke-width', '1');
+                regionRect.setAttribute('id', `region-${region.id}`);
+                regionRect.classList.add('region');
+
+                const ownerNation = gameState.nations.find(n => n.id === region.owner);
+                if (region.isImpassableLand) {
+                    regionRect.setAttribute('fill', '#5d4037'); 
+                    regionRect.setAttribute('fill-opacity', '0.8');
+                } else if (ownerNation) {
+                    regionRect.setAttribute('fill', ownerNation.color);
+                    regionRect.classList.add(ownerNation.isPlayer ? 'player-controlled' : 'enemy-controlled');
+                    regionRect.setAttribute('fill-opacity', region.isSea ? 0.6 : 0.8); 
+                } else { 
+                    regionRect.setAttribute('fill', region.isSea ? '#a0c4ff' : '#b0bec5'); 
+                    regionRect.classList.add('neutral-controlled');
+                    regionRect.setAttribute('fill-opacity', region.isSea ? 0.4 : 0.7);
+                }
+
+                if (!region.isImpassableLand) { 
+                    regionRect.addEventListener('click', () => handleRegionClick(region.id));
+                }
+                gameMapSVG.appendChild(regionRect);
+
+                const nameLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                nameLabel.setAttribute('x', region.x + region.width / 2);
+                nameLabel.setAttribute('y', region.y + region.height / 2 - (region.isImpassableLand ? 0 : 5) );
+                nameLabel.classList.add('region-label');
+                nameLabel.textContent = region.name;
+                gameMapSVG.appendChild(nameLabel);
+
+                if (!region.isImpassableLand && region.units > 0) { 
+                    const unitLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    unitLabel.setAttribute('x', region.x + region.width / 2);
+                    unitLabel.setAttribute('y', region.y + region.height / 2 + 10); 
+                    unitLabel.classList.add('unit-label');
+                    unitLabel.textContent = `⚔️ ${region.units}`; 
+                    gameMapSVG.appendChild(unitLabel);
+                }
+                
+                if (region.id === gameState.selectedRegionId) {
+                    regionRect.setAttribute('stroke', 'gold');
+                    regionRect.setAttribute('stroke-width', '3');
+                }
+            });
+        }
+
+        function handleRegionClick(regionId) {
+            console.log(`Region clicked: ${regionId}`);
+            gameState.selectedRegionId = regionId;
+            
+            gameState.regions.forEach(r => { 
+                const rect = document.getElementById(`region-${r.id}`);
+                if (rect) {
+                    if (r.id === regionId) {
+                        rect.setAttribute('stroke', 'gold');
+                        rect.setAttribute('stroke-width', '3');
+                    } else {
+                        rect.setAttribute('stroke', '#333');
+                        rect.setAttribute('stroke-width', '1');
+                    }
+                }
+            });
+
+            updateSelectedRegionPanel();
+            populateActionButtons();
+        }
+
+        function updateSelectedRegionPanel() {
+            const currentSelectedId = gameState ? gameState.selectedRegionId : null;
+            if (!currentSelectedId) {
+                selectedRegionPanelUI.style.display = 'none';
+                return;
+            }
+
+            const region = gameState.regions.find(r => r.id === currentSelectedId);
+            if (region) {
+                selectedRegionNameUI.textContent = region.name + (region.isSea ? " (Sea Zone)" : "");
+                const ownerNation = gameState.nations.find(n => n.id === region.owner);
+                selectedRegionOwnerUI.textContent = ownerNation ? ownerNation.name : (region.isImpassableLand ? 'Impassable' : 'Neutral');
+                selectedRegionEconomyUI.textContent = (region.isImpassableLand || region.isSea) ? 'N/A' : region.baseEconomy;
+                selectedRegionUnitsUI.textContent = region.isImpassableLand ? 'N/A' : region.units;
+                selectedRegionFortsUI.textContent = (region.isImpassableLand || region.isSea) ? 'N/A' : region.fortification;
+                selectedRegionPanelUI.style.display = 'block';
+            } else {
+                selectedRegionPanelUI.style.display = 'none';
+            }
+        }
+        
+        function populateActionButtons() {
+            actionsContainerUI.innerHTML = ''; 
+            if (!gameState || !gameState.selectedRegionId) return;
+
+            const targetRegion = gameState.regions.find(r => r.id === gameState.selectedRegionId);
+            const playerNation = gameState.nations.find(n => n.id === gameState.playerNationId);
+
+            if (!targetRegion || !playerNation || targetRegion.isImpassableLand) return;
+
+            if (targetRegion.owner === playerNation.id && !targetRegion.isSea) {
+                const developCost = 50 + targetRegion.baseEconomy * 2;
+                const developButton = createActionButton(`Develop Economy (${developCost} M)`, () => developEconomy(targetRegion.id, developCost), playerNation.money >= developCost);
+                actionsContainerUI.appendChild(developButton);
+            }
+
+            if (targetRegion.owner === playerNation.id && !targetRegion.isSea) {
+                const buildCost = 100; 
+                const buildButton = createActionButton(`Build Army Unit (${buildCost} M)`, () => buildArmy(targetRegion.id, buildCost), playerNation.money >= buildCost);
+                actionsContainerUI.appendChild(buildButton);
+            }
+            
+            gameState.regions.filter(originRegion => 
+                originRegion.owner === playerNation.id && 
+                originRegion.units > 0 && 
+                originRegion.neighbors.includes(targetRegion.id) && 
+                originRegion.id !== targetRegion.id &&
+                !originRegion.isImpassableLand 
+            ).forEach(originRegion => {
+                const canMoveToTarget = targetRegion.owner === playerNation.id || targetRegion.owner === null;
+                const canAttackTarget = targetRegion.owner !== null && targetRegion.owner !== playerNation.id;
+
+                if (canMoveToTarget) {
+                     const moveButton = createActionButton(`Move 1 Unit from ${originRegion.name} to ${targetRegion.name}`, () => moveUnits(originRegion.id, targetRegion.id, 1));
+                     actionsContainerUI.appendChild(moveButton);
+                } else if (canAttackTarget) {
+                     const attackButton = createActionButton(`Attack ${targetRegion.name} from ${originRegion.name} with 1 Unit`, () => attackRegion(originRegion.id, targetRegion.id, 1));
+                     actionsContainerUI.appendChild(attackButton);
+                }
+            });
+        }
+
+        function createActionButton(text, onClick, enabled = true) {
+            const button = document.createElement('button');
+            button.textContent = text;
+            button.className = 'action-button w-full';
+            button.disabled = !enabled;
+            button.addEventListener('click', onClick);
+            return button;
+        }
+
+        // --- Game Actions ---
+        function developEconomy(regionId, cost) {
+            const region = gameState.regions.find(r => r.id === regionId);
+            const playerNation = gameState.nations.find(n => n.id === gameState.playerNationId);
+
+            if (region && playerNation && playerNation.money >= cost && region.owner === playerNation.id && !region.isSea && !region.isImpassableLand) {
+                playerNation.money -= cost;
+                region.baseEconomy += 10; 
+                addLogMessage(`${playerNation.name} developed economy in ${region.name}. New value: ${region.baseEconomy}.`);
+                updateAndRedraw();
+            } else {
+                addLogMessage("Cannot develop economy: insufficient funds, not player-owned, or not a developable land region.", "error");
+            }
+        }
+
+        function buildArmy(regionId, cost) {
+            const region = gameState.regions.find(r => r.id === regionId);
+            const playerNation = gameState.nations.find(n => n.id === gameState.playerNationId);
+
+            if (region && playerNation && playerNation.money >= cost && region.owner === playerNation.id && !region.isSea && !region.isImpassableLand) {
+                playerNation.money -= cost;
+                region.units += 1;
+                addLogMessage(`${playerNation.name} built 1 army unit in ${region.name}. Total units: ${region.units}.`);
+                updateAndRedraw();
+            } else {
+                addLogMessage("Cannot build army: insufficient funds, not player-owned, or not a valid land region.", "error");
+            }
+        }
+        
+        function moveUnits(originRegionId, targetRegionId, numUnits) {
+            const originRegion = gameState.regions.find(r => r.id === originRegionId);
+            const targetRegion = gameState.regions.find(r => r.id === targetRegionId);
+            const nation = gameState.nations.find(n => n.id === originRegion.owner); 
+
+            if (!originRegion || !targetRegion || !nation || originRegion.isImpassableLand || targetRegion.isImpassableLand) {
+                addLogMessage("Invalid move parameters (impassable).", "error"); return;
+            }
+            if (originRegion.units < numUnits) {
+                addLogMessage(`Cannot move: Not enough units in ${originRegion.name}.`, "error"); return;
+            }
+            if (!originRegion.neighbors.includes(targetRegionId)) {
+                 addLogMessage(`Cannot move: ${targetRegion.name} is not a neighbor of ${originRegion.name}.`, "error"); return;
+            }
+            if (targetRegion.owner !== nation.id && targetRegion.owner !== null) { 
+                addLogMessage(`Cannot move to hostile ${targetRegion.name}. Use Attack.`, "error"); return;
+            }
+
+            originRegion.units -= numUnits;
+            targetRegion.units += numUnits;
+            if (targetRegion.owner === null) { 
+                targetRegion.owner = nation.id;
+                addLogMessage(`${nation.name} moved ${numUnits} unit(s) from ${originRegion.name} to ${targetRegion.name} and claimed it.`);
+            } else {
+                addLogMessage(`${nation.name} moved ${numUnits} unit(s) from ${originRegion.name} to ${targetRegion.name}.`);
+            }
+            updateAndRedraw();
+        }
+
+        function attackRegion(originRegionId, targetRegionId, attackingUnitsCount) {
+            const originRegion = gameState.regions.find(r => r.id === originRegionId);
+            const targetRegion = gameState.regions.find(r => r.id === targetRegionId);
+            const attackerNation = gameState.nations.find(n => n.id === originRegion.owner);
+
+            if (!originRegion || !targetRegion || !attackerNation || originRegion.isImpassableLand || targetRegion.isImpassableLand) {
+                addLogMessage("Invalid attack parameters (impassable).", "error"); return;
+            }
+             if (originRegion.units < attackingUnitsCount) {
+                addLogMessage(`Cannot attack: Not enough units in ${originRegion.name}.`, "error"); return;
+            }
+            if (!originRegion.neighbors.includes(targetRegionId)) {
+                 addLogMessage(`Cannot attack: ${targetRegion.name} is not a neighbor of ${originRegion.name}.`, "error"); return;
+            }
+            if (targetRegion.owner === attackerNation.id) {
+                addLogMessage("Cannot attack own region. Use Move.", "error"); return;
+            }
+            if (targetRegion.owner === null) { 
+                addLogMessage(`Target ${targetRegion.name} is neutral. Converting to Move action.`, "info");
+                moveUnits(originRegionId, targetRegionId, attackingUnitsCount);
+                return;
+            }
+            
+            originRegion.units -= attackingUnitsCount; 
+            addLogMessage(`${attackerNation.name} attacks ${targetRegion.name} (owner: ${targetRegion.owner}) from ${originRegion.name} with ${attackingUnitsCount} unit(s).`, "combat");
+            performCombat(attackerNation.id, targetRegion, attackingUnitsCount); 
+            updateAndRedraw();
+        }
+
+        function performCombat(attackerNationId, targetRegion, committedAttackingUnits) {
+            const attackerRoll = Math.random(); 
+            const defenderRoll = Math.random(); 
+            
+            let attackerStrength = committedAttackingUnits * (0.75 + attackerRoll * 0.5); 
+            const fortificationBonus = targetRegion.isSea ? 0 : targetRegion.fortification;
+            let defenderStrength = targetRegion.units * (0.85 + defenderRoll * 0.3) + fortificationBonus;
+
+            addLogMessage(`Combat in ${targetRegion.name}: Attacker (${attackerNationId}) power ${attackerStrength.toFixed(1)} vs Defender (${targetRegion.owner}) power ${defenderStrength.toFixed(1)}. Fort bonus: ${fortificationBonus}`, "combat");
+
+            if (attackerStrength > defenderStrength) { 
+                const strengthRatio = Math.max(0.1, (defenderStrength / attackerStrength)); 
+                const defenderLosses = Math.min(targetRegion.units, Math.ceil(targetRegion.units * (0.6 + Math.random() * 0.4))); 
+                const attackerLosses = Math.min(committedAttackingUnits, Math.ceil(committedAttackingUnits * strengthRatio * (0.3 + Math.random() * 0.3))); 
+
+                targetRegion.units -= defenderLosses;
+                const survivingAttackers = committedAttackingUnits - attackerLosses;
+
+                addLogMessage(`Attacker (${attackerNationId}) wins! Defender loses ${defenderLosses} units. Attacker loses ${attackerLosses} units.`, "combat");
+                
+                if (survivingAttackers > 0) {
+                    targetRegion.owner = attackerNationId;
+                    targetRegion.units = survivingAttackers; 
+                    addLogMessage(`${attackerNationId} captures ${targetRegion.name} with ${survivingAttackers} unit(s) remaining.`, "combat");
+                } else {
+                    addLogMessage(`Attacker won but lost all units. ${targetRegion.name} becomes ownerless with ${targetRegion.units} defenders (if any).`, "combat");
+                    targetRegion.owner = null; 
+                }
+            } else { 
+                const strengthRatio = Math.max(0.1, (attackerStrength / defenderStrength));
+                const attackerLosses = Math.min(committedAttackingUnits, Math.ceil(committedAttackingUnits * (0.5 + Math.random() * 0.4))); 
+                const defenderLosses = Math.min(targetRegion.units, Math.ceil(targetRegion.units * strengthRatio * (0.2 + Math.random() * 0.3))); 
+                
+                targetRegion.units -= defenderLosses;
+                addLogMessage(`Defender (${targetRegion.owner}) holds! Attacker loses ${attackerLosses} units. Defender loses ${defenderLosses} units.`, "combat");
+                const defenderNation = gameState.nations.find(n => n.id === targetRegion.owner);
+                addLogMessage(`${targetRegion.name} remains under ${defenderNation ? defenderNation.name : 'Neutral'} control with ${targetRegion.units} units.`, "combat");
+            }
+        }
+
+        function processAITurns() {
+            if (!gameState || !gameState.nations) return;
+            addLogMessage("--- AI Turns Processing (Rapid Growth Mode) ---");
+
+            gameState.nations.filter(n => !n.isPlayer).forEach(nation => {
+                if (nation.money < 10 && gameState.regions.filter(r => r.owner === nation.id).length === 0) { // Very low funds and no regions
+                    addLogMessage(`${nation.name} is effectively eliminated, skips turn.`, "ai_action");
+                    return; 
+                }
+                addLogMessage(`AI Nation: ${nation.name} turn. Money: ${nation.money}. Behavior: ${nation.aiBehavior}`, "ai_action");
+                
+                const ownedLandRegions = gameState.regions.filter(r => r.owner === nation.id && !r.isSea && !r.isImpassableLand);
+                
+                // Phase 1: Economic Development (Rapid)
+                if (nation.money > 50 && ownedLandRegions.length > 0) {
+                    let developedThisTurn = 0;
+                    const maxDevelopActions = nation.aiBehavior === 'aggressive' || nation.aiBehavior === 'expansionist' ? 3 : 2; // More aggressive AI develops more
+                    
+                    ownedLandRegions.sort((a,b) => a.baseEconomy - b.baseEconomy); // Prioritize less developed regions
+
+                    for (const regionToDevelop of ownedLandRegions) {
+                        if (developedThisTurn >= maxDevelopActions) break;
+                        // AI develops more cheaply and more readily
+                        const developCost = 40 + regionToDevelop.baseEconomy * 1.2; 
+                        const developChance = nation.aiBehavior === 'aggressive' ? 0.85 : 0.7;
+                        if (nation.money >= developCost && Math.random() < developChance && regionToDevelop.baseEconomy < 200) { // Cap eco to prevent runaway
+                            nation.money -= developCost;
+                            regionToDevelop.baseEconomy += (10 + Math.floor(Math.random()*11)); // 10-20
+                            addLogMessage(`${nation.name} rapidly developed economy in ${regionToDevelop.name}. Cost: ${developCost.toFixed(0)}. New Eco: ${regionToDevelop.baseEconomy}`, "ai_econ");
+                            developedThisTurn++;
+                        }
+                    }
+                }
+
+                // Phase 2: Military Buildup (Rapid)
+                if (nation.money > 80 && ownedLandRegions.length > 0) {
+                    let builtThisTurn = 0;
+                    const maxBuildActions = nation.aiBehavior === 'aggressive' || nation.aiBehavior === 'expansionist' ? 4 : 2;
+                    const buildCost = 80; // AI builds units cheaper
+                    
+                    // Prioritize regions that are borders or have fewer units
+                    ownedLandRegions.sort((a,b) => a.units - b.units); 
+
+                    for (const regionToBuild of ownedLandRegions) {
+                        if (builtThisTurn >= maxBuildActions) break;
+                        const unitCap = nation.aiBehavior === 'aggressive' ? 20 : (nation.aiBehavior === 'expansionist' ? 15 : 10);
+                        const buildChance = nation.aiBehavior === 'aggressive' ? 0.9 : 0.75;
+
+                        if (nation.money >= buildCost && regionToBuild.units < unitCap && Math.random() < buildChance) { 
+                            nation.money -= buildCost;
+                            regionToBuild.units += (1 + Math.floor(Math.random()*2)); // Build 1-2 units
+                            addLogMessage(`${nation.name} rapidly built units in ${regionToBuild.name}. Cost: ${buildCost}. New Units: ${regionToBuild.units}`, "ai_mil");
+                            builtThisTurn++;
+                        }
+                    }
+                }
+                
+                // Phase 3: Expansion/Attack (Remains Aggressive)
+                const allOwnedRegionsForCampaign = gameState.regions.filter(r => r.owner === nation.id && !r.isImpassableLand);
+                if (allOwnedRegionsForCampaign.length > 0 && nation.money > 30) { 
+                    const possibleTargets = [];
+                    allOwnedRegionsForCampaign.forEach(origin => {
+                        if (origin.units > 1) { // Need at least 2 units to consider sending some
+                            origin.neighbors.forEach(neighborId => {
+                                const target = gameState.regions.find(r => r.id === neighborId && !r.isImpassableLand);
+                                if (target && target.owner !== nation.id) { 
+                                    let desirability = 0;
+                                    // Commit more units, especially if aggressive
+                                    const unitsToSend = Math.min(origin.units -1, Math.max(1, Math.ceil(origin.units * (nation.aiBehavior === 'aggressive' ? 0.8 : 0.6)))); 
+
+                                    if (target.owner === null) desirability += (target.isSea ? 4 : 6); 
+                                    else if (target.owner === PLAYER_NATION_ID) desirability += (nation.aiBehavior === 'aggressive' || nation.aiBehavior === 'expansionist' ? 7 : 4); 
+                                    else desirability += 3; 
+
+                                    desirability += Math.max(0, unitsToSend - (target.units + (target.isSea ? 0 : target.fortification))); // Factor in forts for land
+                                    if (target.isSea && target.owner !== null) desirability += 2; 
+
+                                    const attackThreshold = nation.aiBehavior === 'aggressive' ? 2 : (nation.aiBehavior === 'expansionist' ? 3 : 5);
+                                    if (desirability > attackThreshold && unitsToSend > 0) {
+                                         possibleTargets.push({origin, target, unitsToSend, desirability});
+                                    }
+                                }
+                            });
+                        }
+                    });
+
+                    if (possibleTargets.length > 0) {
+                        possibleTargets.sort((a,b) => b.desirability - a.desirability); 
+                        const bestAttack = possibleTargets[0];
+                        const {origin, target, unitsToSend} = bestAttack;
+                        
+                        if (nation.money > (unitsToSend * 5)) { // Ensure enough money for a small campaign cost per unit
+                            addLogMessage(`${nation.name} (AI) is launching action against ${target.name} from ${origin.name} with ${unitsToSend} units (Desirability: ${bestAttack.desirability.toFixed(1)}).`, "ai_action");
+                            nation.money -= (unitsToSend * 2); // Small campaign cost
+                            origin.units -= unitsToSend;
+
+                            if (target.owner === null) { 
+                                target.owner = nation.id;
+                                target.units = unitsToSend; 
+                                addLogMessage(`${nation.name} expanded into neutral ${target.name} from ${origin.name} with ${unitsToSend} units.`, "ai_action");
+                            } else { 
+                                addLogMessage(`${nation.name} attacks ${target.name} (owner: ${target.owner}) from ${origin.name} with ${unitsToSend} units.`, "ai_action");
+                                performCombat(nation.id, target, unitsToSend);
+                            }
+                        } else {
+                             addLogMessage(`${nation.name} considered action against ${target.name} but lacked funds for the campaign.`, "ai_action");
+                        }
+                    } else {
+                         // addLogMessage(`${nation.name} consolidates (no highly desirable targets found this phase).`, "ai_action");
+                    }
+                } else if (allOwnedRegionsForCampaign.length > 0) {
+                     addLogMessage(`${nation.name} has regions but is low on funds for major offensive actions.`, "ai_action");
+                }
+            });
+            addLogMessage("--- AI Turns Complete ---");
+        }
+        
+        function endTurn() {
+            if (!gameState) return;
+            const playerNationInfo = gameState.nations.find(n=>n.isPlayer);
+            addLogMessage(`Player ${playerNationInfo ? playerNationInfo.name : 'N/A'} ends turn ${gameState.turn}.`);
+            
+            processAITurns();
+
+            gameState.nations.forEach(nation => {
+                let income = 0;
+                gameState.regions.filter(r => r.owner === nation.id && !r.isSea && !r.isImpassableLand).forEach(region => {
+                    income += region.baseEconomy;
+                });
+                nation.money += income;
+                if (nation.isPlayer && income > 0) addLogMessage(`${nation.name} received ${income} M from regions.`);
+                else if (!nation.isPlayer && income > 0) addLogMessage(`${nation.name} (AI) received ${income} M. Current Money: ${nation.money}`, "ai_econ");
+            });
+
+            gameState.turn += 1;
+            addLogMessage(`--- Beginning Turn ${gameState.turn} ---`);
+            
+            gameState.selectedRegionId = null;
+
+            updateAndRedraw();
+            checkWinLossConditions();
+        }
+
+        function checkWinLossConditions() {
+            if (!gameState) return;
+            const playerNation = gameState.nations.find(n => n.id === gameState.playerNationId);
+            const playerLandRegions = gameState.regions.filter(r => r.owner === playerNation.id && !r.isSea && !r.isImpassableLand);
+
+            if (playerLandRegions.length === 0 && playerNation.money < 50) { 
+                showModal("Game Over", `${playerNation.name} has been eliminated! Better luck next time. Refresh to play again.`);
+                addLogMessage(`${playerNation.name} has been eliminated! Game Over.`);
+                nextTurnButton.disabled = true;
+                actionsContainerUI.innerHTML = '<p>Game Over. Refresh to start a new game.</p>';
+                return; 
+            }
+
+            const totalLandRegions = gameState.regions.filter(r => !r.isSea && !r.isImpassableLand).length;
+            if (playerLandRegions.length >= Math.ceil(totalLandRegions * 0.6)) { // Control 60% of land regions
+                 showModal("Victory!", `${playerNation.name} has achieved dominance over Europe! Congratulations! Refresh to play again.`);
+                 addLogMessage(`${playerNation.name} has won the game!`);
+                 nextTurnButton.disabled = true;
+                 actionsContainerUI.innerHTML = '<p>You have won! Refresh to start a new game.</p>';
+            }
+        }
+
+        function updateAndRedraw() {
+            updateUI(); 
+            drawMap(); 
+        }
+        
+        // Event Listeners
+        nextTurnButton.addEventListener('click', endTurn);
+
+        // Initial Game Load
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeGameData();
+        });
+
+    </script>
+</body>
+</html>
